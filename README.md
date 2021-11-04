@@ -6,8 +6,8 @@ git rm -rf --cached myuntrackedfolder
 
 git add myuntrackedfolder
 
-
 ### File Base Routing
+
 Must know:
 
 [...id ] just means multiple slugs
@@ -120,8 +120,40 @@ Do not use .png / .jpg for production. Use the image compoenent
 import Image from "next/image";
 
 <Image src={"..."} alt={"testing"} width={240} height={160} />;
+```
+
+### API
+
+API Calls. Server side API
+
+```js
+export default function handler(req, rest) {
+  if (req.method === "POST") {
+    const email = req.body.email;
+    const feedbackText = req.body.text;
+    const newFeedback = {
+      id: new Date().toISOString(),
+      email: email,
+      text: feedbackText,
+    };
+  }
+}
+```
+
+```js
+fetch("/api/feedback", {
+  method: "POST",
+  body: JSON.stringify({
+    email: enteredEmail,
+    text: enteredFeedback,
+  }),
+  headers: {
+    "Content-Type": "application/json",
+  },
+})
+  .then((res) => res.json())
+  .then((data) => console.log(data));
 ```  
 
-### API  
-
-API Calls.
+If doing getStaticProps() for API, use internal file system. Don't self call. API also follow folder structure 
+with pages. Like /api/feedback/index.js
