@@ -153,7 +153,220 @@ fetch("/api/feedback", {
 })
   .then((res) => res.json())
   .then((data) => console.log(data));
-```  
+```
 
-If doing getStaticProps() for API, use internal file system. Don't self call. API also follow folder structure 
+If doing getStaticProps() for API, use internal file system. Don't self call. API also follow folder structure
 with pages. Like /api/feedback/index.js
+
+### Auth
+
+Install next-auth, bcryptjs. Create a helper function auth.js and db.js(optional).  
+For API: api/auth/[.. .nextauth].js, insied shoudl be like that
+
+```js
+import NextAuth from "next-auth";
+import Providers from "next-auth/providers";
+import { verifyPassword } from "../../../helper/auth";
+import { connectToDatabase } from "../../../helper/db";
+
+export default NextAuth({
+  session: {
+    jwt: true, // ONLY FOR JWT (SELF HOSTED DB)
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+  },
+  providers: [
+    Providers.Credentials({
+      // CAN USE DISCORD LOGIN/GOOGLE LOGIN ETC
+      async authorize(credentials) {
+        const client = await connectToDatabase();
+        const usersCollection = client.db().collection("users");
+        const user = await usersCollection.findOne({
+          email: credentials.email,
+        });
+        if (!user) {
+          client.close();
+          throw new Error("User not found");
+        }
+        const isValid = await verifyPassword(
+          credentials.password,
+          user.password
+        );
+        if (!isValid) {
+          client.close();
+          throw new Error("Invalid password");
+        }
+        client.close();
+        return { email: user.email };
+      },
+    }),
+  ],
+});
+```
+
+To login/logout:
+
+```js
+import { useSession, signOut } from "next-auth/client";
+
+// Sign in
+if (isLogin) {
+  const result = await signIn("credentials", {
+    redirect: false, // by default nextJS will send to another error page
+    email: enteredEmail,
+    password: enteredPassword,
+  });
+}
+
+// Sign out
+signOut();
+```
+
+Next Auth will auto create and store cookie session using signIn function.
+
+To use:
+
+```js
+import { useSession } from "next-auth/client";
+
+const [session, loading] = useSession();
+
+return (
+  {!session && !loading && (
+    <Link href="..."/>
+  )}
+)
+```
+
+```js
+// Check Page Auth (Not so good)
+import { getSession } from "next-auth/client";
+
+const [isLoading, setIsLoading] = useState(true);
+
+useEffect(() => {
+  getSession().then((session) => {
+    if (!session) {
+      window.location.href = "/auth";
+    } else {
+      setIsLoading(false);
+    }
+  });
+}, []);
+```
+
+Use getServerSideProps to PREVENT page flashing. Use this then no need useEffect above.
+
+```js
+import { getSession } from "next-auth/client";
+
+export async function getServerSideProps(context) {
+  const session = await getSession({ req: context.req });
+
+  if (!session) {
+    return {
+      redirect: {
+        redirect: {
+          destination: "/auth",
+          permanent: false,
+        },
+      },
+    };
+  }
+
+  return {
+    props: { session },
+  };
+}
+```
+
+However, if you don't want to refresh the page stats (example i am already logged in, previous one is no log in at all before)
+
+```js
+const router = useRouter();
+
+router.replace("/profile");
+```
+
+Optimizing use Provider in \_app.js. Prevent double getting session cookie
+
+```js
+// Optimization: Must have getServerSideProps
+import { Provider } from "next-auth/client";
+function MyApp({ Component, pageProps }) {
+  return (
+    <Provider session={pageProps.session}>
+      <Layout>
+        <Component {...pageProps} />
+      </Layout>
+    </Provider>
+  );
+}
+```
+
+Protect API routes (Headers)
+
+```js
+import { getSession } from "next-auth/client";
+import { connectToDatabase } from "../../../helper/db";
+import { verifyPassword, hashPassword } from "../../../helper/password";
+
+export default async function handler(req, res) {
+  if (req.method !== "PATCH") {
+    return;
+  }
+  // Check if auth user or not
+  const session = await getSession({ req: req });
+
+  if (!session) {
+    res.status(401).json({
+      message: "Auth Missing",
+    });
+    return;
+  }
+
+  const userEmail = session.user.email;
+  const oldPassword = req.body.oldPassword;
+  const newPassword = req.body.newPassword;
+
+  const client = await connectToDatabase();
+  const userCollection = client.db().collection("users");
+
+  const user = await userCollection.findOne({
+    email: userEmail,
+  });
+
+  if (!user) {
+    res.status(404).json({
+      message: "User No Found",
+    });
+    client.close();
+    return;
+  }
+
+  const currentPassword = user.password;
+
+  const passwordAreEqual = await verifyPassword(oldPassword, currentPassword);
+
+  if (!passwordAreEqual) {
+    res.status(403).json({
+      message: "Wrong Auth (Invalid Password)",
+    });
+    client.close();
+    return;
+  }
+
+  const newHashedPassword = await hashPassword(newPassword);
+
+  const result = await userCollection.updateOne(
+    { email: userEmail },
+    { $set: { password: newHashedPassword } }
+  );
+
+  client.close();
+  res.status(200).json({
+    message: "Password Updated",
+  });
+}
+```
+
+NEXTAUTH_URL environment not set, deploy in production. 
